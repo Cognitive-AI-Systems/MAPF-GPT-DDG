@@ -1,0 +1,32 @@
+environment:
+  name: Environment
+  with_animation: False
+  on_target: nothing
+  max_episode_steps: 128
+  observation_type: MAPF
+  collision_system: soft
+  seed: 0
+  num_agents:
+    grid_search: [24, 32]
+  map_name:
+    grid_search:
+      [
+        validation-random-seed-000,
+        validation-random-seed-001,
+        validation-random-seed-002,
+        validation-random-seed-003,
+        validation-random-seed-004,
+        validation-random-seed-005,
+      ]
+
+algorithms:
+  MAPF-GPT:
+    name: MAPF-GPT
+    parallel_backend: sequential
+    num_process: 1
+
+results_views:
+  TabularView1:
+    type: tabular
+    drop_keys: [seed, map_name]
+    print_results: True
