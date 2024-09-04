@@ -61,3 +61,15 @@ To train MAPF-GPT from scratch or to fine-tune the existing models on other data
 ```
 torchrun --standalone --nproc_per_node=1 train.py gpt/config-6M.py
 ```
+
+## Citation:
+
+```bibtex
+@article{andreychuk2024mapf-gpt,
+  title={MAPF-GPT: Imitation Learning for Multi-Agent Pathfinding at Scale},
+  author={Anton Andreychuk and Konstantin Yakovlev and Aleksandr Panov and Alexey Skrynnik},
+  journal={arXiv preprint arXiv:2409.00134},
+  year={2024},
+  url={https://arxiv.org/abs/2409.00134}
+}
+```
