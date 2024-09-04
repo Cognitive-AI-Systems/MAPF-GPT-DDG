@@ -1,10 +1,17 @@
 # MAPF-GPT: Imitation Learning for Multi-Agent Pathfinding at Scale
 
+
+
 <div align="center" dir="auto">
    <p dir="auto"><img src="svg/puzzles.svg" alt="Follower" style="max-width: 100%;"></p>
 </div>
 
 ---
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/Cognitive-AI-Systems/MAPF-GPT/blob/main/LICENSE)
+[![arXiv](https://img.shields.io/badge/arXiv-2310.01207-b31b1b.svg)](https://arxiv.org/abs/2409.00134)
+[![Hugging Face](https://img.shields.io/badge/Weights-MAPF--GPT-blue?logo=huggingface)](https://huggingface.co/aandreychuk/MAPF-GPT/tree/main)
+
 
 The repository consists of the following crucial parts:
 
