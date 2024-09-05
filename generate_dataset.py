@@ -1,16 +1,16 @@
 import glob
-import hashlib
-import json
-import multiprocessing as mp
 import os
-import random
-from pathlib import Path
-
-import h5py
+import json
+import yaml
+import hashlib
 import numpy as np
 import pyarrow as pa
 import pyarrow.ipc as ipc
-import yaml
+import shutil
+import multiprocessing as mp
+from functools import partial
+from pathlib import Path
+
 from pogema_toolbox.create_env import Environment
 from pogema_toolbox.eval_utils import initialize_wandb, save_evaluation_results
 from pogema_toolbox.evaluator import evaluation
@@ -32,21 +32,38 @@ CONFIGS = [
     "dataset_configs/12-medium-random/12-medium-random-part1.yaml",
 ]
 
+RANDOM_MAPS_FOLDER = "dataset_configs/12-medium-random"
+MAZES_MAPS_FOLDER = "dataset_configs/10-medium-mazes"
+
+NUM_CHUNKS = 50
+FILE_PER_CHUNK = 10
+DESIRED_SIZE = 10*2**21 # per chunk
+MAZE_RATIO = 0.9
+NUM_PROCESSES = 50
 
 def tensor_to_hash(tensor):
     tensor_bytes = tensor.tobytes()
     return hashlib.sha256(tensor_bytes).hexdigest()
 
+def get_files_by_type(folder_path):
+    all_files = glob.glob(os.path.join(folder_path, '*.json'))
+    maze_files = [f for f in all_files if 'mazes' in os.path.basename(f).lower()]
+    random_files = [f for f in all_files if 'random' in os.path.basename(f).lower()]
+    maze_files.sort()
+    random_files.sort()
 
-def add_tensors_and_actions_to_hdf5(
-    name,
-    hdf5_file,
-    dataset_name_tensors,
-    dataset_name_actions,
-    tensors,
-    actions,
-    known_hashes=None,
-):
+    return maze_files, random_files
+
+def generate_part(map_name, maps):
+    print("processing map", map_name)
+    cfg = InputParameters()
+    with open(map_name, "r") as f:
+        data = json.load(f)
+    generator = ObservationGenerator(maps, data, cfg)
+    tensors, gt_actions = generator.generate_observations(0, len(data))
+    return tensors, gt_actions
+
+def balance_and_filter_tensors(tensors, actions, known_hashes=None):
     new_tensors = []
     new_actions = []
     duplicates = 0
@@ -77,138 +94,21 @@ def add_tensors_and_actions_to_hdf5(
                 else:
                     new_actions[i] = 0
             i -= 1
-        print(name, discarded, duplicates, len(new_tensors), actions_made)
+        print(discarded, duplicates, len(new_tensors), actions_made)
         new_tensors = np.array(new_tensors)
         new_actions = np.array(new_actions)
+        indices = np.arange(len(new_tensors))
+        np.random.shuffle(indices) # shuffle to balance actions
+        new_tensors = new_tensors[indices]
+        new_actions = new_actions[indices]
+    return new_tensors, new_actions
 
-        if dataset_name_tensors not in hdf5_file:
-            maxshape_tensors = (None,) + new_tensors.shape[1:]
-            hdf5_file.create_dataset(
-                dataset_name_tensors,
-                data=new_tensors,
-                maxshape=maxshape_tensors,
-                compression="lzf",
-            )
-
-            maxshape_actions = (None,) + new_actions.shape[1:]
-            hdf5_file.create_dataset(
-                dataset_name_actions,
-                data=new_actions,
-                maxshape=maxshape_actions,
-                compression="lzf",
-            )
-        else:
-            current_shape_tensors = hdf5_file[dataset_name_tensors].shape
-            new_shape_tensors = (
-                current_shape_tensors[0] + new_tensors.shape[0],
-            ) + current_shape_tensors[1:]
-            hdf5_file[dataset_name_tensors].resize(new_shape_tensors)
-            hdf5_file[dataset_name_tensors][-new_tensors.shape[0] :] = new_tensors
-
-            current_shape_actions = hdf5_file[dataset_name_actions].shape
-            new_shape_actions = (
-                current_shape_actions[0] + new_actions.shape[0],
-            ) + current_shape_actions[1:]
-            hdf5_file[dataset_name_actions].resize(new_shape_actions)
-            hdf5_file[dataset_name_actions][-new_actions.shape[0] :] = new_actions
-    return known_hashes
-
-
-def generate_part(map_name):
-    if os.path.isfile(map_name[:-4] + "hdf5"):
-        try:
-            with h5py.File(map_name[:-4] + "hdf5", "r") as file:
-                print(map_name, len(file["input_tensors"]), "file is ok, continue")
-                return
-        except Exception as _:
-            print(map_name, "file is not ok, regenerate it!")
-    print("processing map", map_name)
-    cfg = InputParameters()
-    with open(map_name, "r") as f:
-        data = json.load(f)
-    if "random" in map_name:
-        maps = yaml.safe_load(open("dataset_configs/12-medium-random/maps.yaml", "r"))
-    else:
-        maps = yaml.safe_load(open("dataset_configs/10-medium-mazes/maps.yaml", "r"))
-    generator = ObservationGenerator(maps, data, cfg)
-    tensors, gt_actions = generator.generate_observations(0, len(data))
-    with h5py.File(map_name[:-4] + "hdf5", "w") as hdf5_file:
-        add_tensors_and_actions_to_hdf5(
-            map_name[:-4], hdf5_file, "input_tensors", "gt_actions", tensors, gt_actions
-        )
-
-
-def split_json(filename):
-    with open(filename, "r") as f:
-        data = json.load(f)
-    data_per_map = {}
-    for d in data:
-        if d["env_grid_search"]["map_name"] not in data_per_map:
-            data_per_map[d["env_grid_search"]["map_name"]] = []
-        data_per_map[d["env_grid_search"]["map_name"]].append(d)
-
-    os.makedirs(TEMP_FOLDER, exist_ok=True)
-    for k, v in data_per_map.items():
-        with open(f"{TEMP_FOLDER}/{k}.json", "w") as f:
-            json.dump(v, f)
-
-
-def generate_maps_hdfs():
-    small_files = glob.glob(f"{TEMP_FOLDER}/*.json")
-    with mp.Pool(processes=64) as pool:
-        pool.map(generate_part, small_files)
-
-
-def process_small_hdf5_files(big_hdf5_filename, small_files_pattern):
-    known_hashes = set()
-
-    with h5py.File(big_hdf5_filename, "a") as big_hdf5_file:
-        if "input_tensors" in big_hdf5_file:
-            for k in range(0, len(big_hdf5_file["input_tensors"]), 1000):
-                tensors_dataset = big_hdf5_file["input_tensors"][
-                    k : min(k + 1000, len(big_hdf5_file["input_tensors"]))
-                ]
-                for tensor in tensors_dataset:
-                    tensor_hash = tensor_to_hash(tensor)
-                    known_hashes.add(tensor_hash)
-
-        small_files = glob.glob(small_files_pattern)
-        for small_file in small_files:
-            with h5py.File(small_file, "r") as sf:
-                tensors = sf["input_tensors"][:]
-                actions = sf["gt_actions"][:]
-                print(len(tensors), len(known_hashes), small_file)
-                known_hashes = add_tensors_and_actions_to_hdf5(
-                    big_hdf5_filename,
-                    big_hdf5_file,
-                    "input_tensors",
-                    "gt_actions",
-                    tensors,
-                    actions,
-                    known_hashes,
-                )
-
-
-def save_arrow_chunk(chunk_input_tensors, chunk_gt_actions, schema, file_path):
-    input_tensors_col = pa.array(chunk_input_tensors.tolist(), type=pa.list_(pa.int8()))
-    gt_actions_col = pa.array(chunk_gt_actions.astype(np.int8))
-
-    table = pa.Table.from_arrays([input_tensors_col, gt_actions_col], schema=schema)
-
-    with open(file_path, "wb") as f:
-        with ipc.new_stream(f, schema) as writer:
-            writer.write(table)
-    print(f"Saved {file_path}")
-
-
-def calculate_elements_to_pick(file_paths, total_pick_count):
+def calculate_elements_to_pick(data, total_pick_count):
     file_elements = {}
     total_elements = 0
-    for file_path in file_paths:
-        with h5py.File(file_path, "r") as f:
-            num_elements = len(f["input_tensors"])
-        file_elements[file_path] = num_elements
-        total_elements += num_elements
+    for file, (tensors, actions) in data.items():
+        total_elements += len(tensors)
+        file_elements[file] = len(tensors)
     if total_pick_count > total_elements:
         print(
             f"Warning! Files don't contain enough data to pick {total_pick_count} elements. Using {total_elements} elements instead"
@@ -224,86 +124,90 @@ def calculate_elements_to_pick(file_paths, total_pick_count):
         total_picked += elements_to_pick[file_path]
 
     while total_picked < total_pick_count:
-        for file_path, _ in file_elements.items():
+        for file_path, num_elements in file_elements.items():
             if total_picked == total_pick_count:
                 break
-            elements_to_pick[file_path] += 1
-            total_picked += 1
+            if elements_to_pick[file_path] < num_elements:
+                elements_to_pick[file_path] += 1
+                total_picked += 1
 
-    return elements_to_pick
+    return elements_to_pick, total_pick_count
 
+def process_file(file, maps):
+    tensors, actions = generate_part(file, maps)
+    tensors, actions = balance_and_filter_tensors(tensors, actions)
+    return file, tensors, actions
 
-def process_and_save_chunk(
-    file_chunk,
-    chunk_index,
-    output_folder,
-    max_elements_random=1024 * 1024 * 2,
-    max_elements_mazes=1024 * 1024 * 18,
-    num_files=10,
-):
-    data = []
-    random_files_chunk = []
-    mazes_files_chunk = []
-    for file_path in file_chunk:
-        if "random" in file_path:
-            random_files_chunk.append(file_path)
-        else:
-            mazes_files_chunk.append(file_path)
-    random_to_pick = calculate_elements_to_pick(random_files_chunk, max_elements_random)
-    mazes_to_pick = calculate_elements_to_pick(mazes_files_chunk, max_elements_mazes)
-    for file_path in file_chunk:
+def process_files(maze_files, random_files, output_file):
+    maps_random = yaml.safe_load(open(f"{RANDOM_MAPS_FOLDER}/maps.yaml", "r"))
+    maps_mazes = yaml.safe_load(open(f"{MAZES_MAPS_FOLDER}/maps.yaml", "r"))
+    maze_desired_size = int(DESIRED_SIZE * MAZE_RATIO)
+    random_desired_size = DESIRED_SIZE - maze_desired_size
+    
+    # Process maze files
+    with mp.Pool(NUM_PROCESSES) as pool:
+        maze_results = pool.map(partial(process_file, maps=maps_mazes), maze_files)
+    
+    # Process random files
+    with mp.Pool(NUM_PROCESSES) as pool:
+        random_results = pool.map(partial(process_file, maps=maps_random), random_files)
+    
+    # Combine results into dictionaries
+    maze_data = {file: (tensors, actions) for file, tensors, actions in maze_results}
+    random_data = {file: (tensors, actions) for file, tensors, actions in random_results}
 
-        try:
-            with h5py.File(file_path, "r") as file:
-                if "input_tensors" in file and "gt_actions" in file:
-                    if "random" in file_path:
-                        end_index = random_to_pick[file_path]
-                    else:
-                        end_index = mazes_to_pick[file_path]
-                    input_tensors = file["input_tensors"][:end_index]
-                    gt_actions = file["gt_actions"][:end_index]
-
-                    if input_tensors.shape[0] != gt_actions.shape[0]:
-                        raise ValueError(
-                            "Mismatch in number of elements between input_tensors and gt_actions"
-                        )
-
-                    num_elements = input_tensors.shape[0]
-                    data.append((input_tensors, gt_actions))
-
-        except Exception as e:
-            print(f"Error processing file {file_path}: {e}")
-
-    input_tensors_data = np.concatenate([x[0] for x in data], axis=0)
-    gt_actions_data = np.concatenate([x[1] for x in data], axis=0)
-
-    num_elements = len(input_tensors_data)
-    indices = np.arange(num_elements)
+    
+    # Pick required portion from each file
+    maze_elements_to_pick, total_maze_elements = calculate_elements_to_pick(maze_data, maze_desired_size)
+    random_elements_to_pick, total_random_elements = calculate_elements_to_pick(random_data, random_desired_size)
+    
+    all_tensors = np.empty((total_maze_elements + total_random_elements, 256), dtype=np.int8)
+    all_actions = np.empty(total_maze_elements + total_random_elements, dtype=np.int8)
+    
+    current_index = 0
+    for file_path, pick_count in maze_elements_to_pick.items():
+        if pick_count > 0:
+            all_tensors[current_index:current_index+pick_count] = maze_data[file_path][0][:pick_count]
+            all_actions[current_index:current_index+pick_count] = maze_data[file_path][1][:pick_count]
+        current_index += pick_count
+    for file_path, pick_count in random_elements_to_pick.items():
+        if pick_count > 0:
+            all_tensors[current_index:current_index+pick_count] = random_data[file_path][0][:pick_count]
+            all_actions[current_index:current_index+pick_count] = random_data[file_path][1][:pick_count]
+        current_index += pick_count
+    
+    # Shuffle the data
+    indices = np.arange(len(all_tensors))
     np.random.shuffle(indices)
-    input_tensors_data = input_tensors_data[indices]
-    gt_actions_data = gt_actions_data[indices]
-
-    schema = pa.schema(
-        [
-            ("input_tensors", pa.list_(pa.int8())),  # List of 256 int8 values
-            ("gt_actions", pa.int8()),
-        ]
-    )
-
-    chunk_size = len(input_tensors_data) // num_files
-    file_paths = []
-
-    for i in range(num_files):
-        start = i * chunk_size
-        end = None if i == num_files - 1 else (i + 1) * chunk_size
-        chunk_input_tensors = input_tensors_data[start:end]
-        chunk_gt_actions = gt_actions_data[start:end]
-
-        file_path = os.path.join(output_folder, f"chunk_{chunk_index}_file_{i}.arrow")
-        file_paths.append((chunk_input_tensors, chunk_gt_actions, schema, file_path))
-    for file_args in file_paths:
-        save_arrow_chunk(*file_args)
-
+    all_tensors = all_tensors[indices]
+    all_actions = all_actions[indices]
+    
+    # Save the data
+    schema = pa.schema([
+        ('input_tensors', pa.list_(pa.int8())),
+        ('gt_actions', pa.int8())
+    ])
+    num_samples = len(all_tensors)
+    samples_per_file = num_samples // FILE_PER_CHUNK
+    
+    for i in range(FILE_PER_CHUNK):
+        start_idx = i * samples_per_file
+        end_idx = start_idx + samples_per_file if i < FILE_PER_CHUNK - 1 else num_samples
+        
+        tensors_chunk = all_tensors[start_idx:end_idx]
+        actions_chunk = all_actions[start_idx:end_idx]
+        
+        input_tensors_col = pa.array(tensors_chunk.tolist(), type=pa.list_(pa.int8()))
+        gt_actions_col = pa.array(actions_chunk)
+        
+        table = pa.Table.from_arrays([input_tensors_col, gt_actions_col], schema=schema)
+        
+        chunk_output_file = f"{output_file}_part_{i}.arrow"
+        with open(chunk_output_file, "wb") as f:
+            with ipc.new_file(f, schema) as writer:
+                writer.write(table)
+        
+        print(f"Saved {chunk_output_file} with {len(tensors_chunk)} samples")
 
 def run_expert():
     env_cfg_name = "Environment"
@@ -314,7 +218,7 @@ def run_expert():
     for path in unique_paths:
         with open(f"{path}/maps.yaml", "r") as f:
             folder_maps = yaml.safe_load(f)
-            maps.update = {**folder_maps}
+            maps.update(folder_maps)
     ToolboxRegistry.register_maps(maps)
     for config in CONFIGS:
         with open(config, "r") as f:
@@ -325,46 +229,46 @@ def run_expert():
         evaluation(evaluation_config, eval_dir=eval_dir)
         save_evaluation_results(eval_dir)
 
+def split_json(filename):
+    with open(filename, "r") as f:
+        data = json.load(f)
+    data_per_map = {}
+    for d in data:
+        if d["env_grid_search"]["map_name"] not in data_per_map:
+            data_per_map[d["env_grid_search"]["map_name"]] = []
+        data_per_map[d["env_grid_search"]["map_name"]].append(d)
+
+    os.makedirs(TEMP_FOLDER, exist_ok=True)
+    for k, v in data_per_map.items():
+        with open(f"{TEMP_FOLDER}/{k}.json", "w") as f:
+            json.dump(v, f)
 
 def generate_chunks():
-    all_files = glob.glob(os.path.join(TEMP_FOLDER, "*.hdf5"))
-
-    random.shuffle(all_files)
-    num_chunks = 50
-    chunk_size = len(all_files) // num_chunks
-    chunks = [
-        all_files[i : i + chunk_size] for i in range(0, len(all_files), chunk_size)
-    ]
-
-    os.makedirs(DATASET_FOLDER, exist_ok=True)
-    with mp.Pool(5) as pool:
-        pool.starmap(
-            process_and_save_chunk,
-            [(chunk, i, DATASET_FOLDER) for i, chunk in enumerate(chunks)],
-        )
-
-
+    maze_files, random_files = get_files_by_type(TEMP_FOLDER)
+    
+    maze_chunk_size = len(maze_files) // NUM_CHUNKS
+    random_chunk_size = len(random_files) // NUM_CHUNKS
+    
+    maze_chunks = [maze_files[i:i+maze_chunk_size] for i in range(0, len(maze_files), maze_chunk_size)]
+    random_chunks = [random_files[i:i+random_chunk_size] for i in range(0, len(random_files), random_chunk_size)]
+    
+    for i in range(NUM_CHUNKS):
+        process_files(maze_chunks[i], random_chunks[i], f"{DATASET_FOLDER}/chunk_{i}")
+        
 def main():
-    # Step 1: Run LaCAM to obtain expert data in json format.
-    run_expert()
+     # Step 1: Run LaCAM to obtain expert data in json format.
+    #run_expert()
 
     # Step 2: Load one (or mutiple) big json file and split it (them) into small ones (1 map = 1 json).
     files = [f"{EXPERT_DATA_FOLDER}/{config[:-5]}/LaCAM.json" for config in CONFIGS]
     with mp.Pool() as pool:
         pool.map(split_json, files)
-
-    # Step 3: Generate observations.
-    # Remove duplicates and redundant wait actions.
-    # They are stored in hdf5 files with compression to reduce memory usage.
-    generate_maps_hdfs()
-
-    # Step 4: Generate dataset with chunk files.
-    # Current settings create 50 chunks with 10 files in each of them.
-    # Each chunk contains 2*2^20 observations from random maps and 18*2^20 observations from mazes.
-    # 1B dataset requires 258GB of disk space (even being stored in int8 format).
-    # Around 200 Gb of additional space is required to store intermediate data, i.e. json and hdf5 files.
+    
+    # Step 3: Generate dataset with chunk files.
     generate_chunks()
-
+    
+    #Step 4: clear temp folder
+    shutil.rmtree(TEMP_FOLDER)
 
 if __name__ == "__main__":
     main()

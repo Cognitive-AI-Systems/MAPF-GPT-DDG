@@ -59,7 +59,7 @@ Due to the very large size of the dataset, we are not able to upload it to the r
 python3 generate_dataset.py
 ```
 
-Please note that the full training dataset for 1B observation-gt_action pairs requires 258 GB of disk space and additionally around 200 GB for intermediate files. It also requires a lot of time to solve all instances via LaCAM. By modifying the config files in `dataset_configs` (adjusting the number of seeds, reducing the number of maps), you can reduce the time and space required to generate the dataset (as well as its final size).
+Please note that the full training dataset for 1B observation-gt_action pairs requires 256 GB of disk space and additionally around 20 GB for temporary files. It also requires a lot of time to solve all instances via LaCAM. By modifying the config files in `dataset_configs` (adjusting the number of seeds, reducing the number of maps), you can reduce the time and space required to generate the dataset (as well as its final size).
 
 ## Running training of MAPF-GPT
 

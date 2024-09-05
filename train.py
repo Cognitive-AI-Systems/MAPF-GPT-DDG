@@ -91,7 +91,7 @@ def get_dataset_size(folder_path):
 
     for file_path in file_paths:
         with pa.memory_map(file_path) as source:
-            table = pa.ipc.open_stream(source).read_all()
+            table = pa.ipc.open_file(source).read_all()
         num_elements = len(table)
         total_elements += num_elements
 
@@ -195,7 +195,7 @@ def batch_generator(path):
     def read_arrow_files(file_paths):
         for file_path in cycle(file_paths):
             with pa.memory_map(file_path) as source:
-                table = pa.ipc.open_stream(source).read_all()
+                table = pa.ipc.open_file(source).read_all()
             input_tensors = table["input_tensors"].to_numpy()
             gt_actions = table["gt_actions"].to_numpy()
 
