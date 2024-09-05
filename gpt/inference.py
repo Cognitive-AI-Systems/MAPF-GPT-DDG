@@ -4,7 +4,9 @@ from typing import Literal, Optional
 
 import cppimport.import_hook
 import torch
+from huggingface_hub import hf_hub_download
 from pogema_toolbox.algorithm_config import AlgoBase
+from pogema_toolbox.registry import ToolboxRegistry
 from pydantic import Extra
 
 from gpt.model import GPT, GPTConfig
@@ -26,6 +28,7 @@ class MAPFGPTInferenceConfig(AlgoBase, extra=Extra.forbid):
     mask_goal: bool = False
     mask_cost2go: bool = False
     mask_greed_action: bool = False
+    repo_id: str = 'aandreychuk/MAPF-GPT'
 
 
 def strip_prefix_from_state_dict(state_dict, prefix="_orig_mod."):
@@ -35,7 +38,7 @@ def strip_prefix_from_state_dict(state_dict, prefix="_orig_mod."):
     new_state_dict = {}
     for k, v in state_dict.items():
         if k.startswith(prefix):
-            new_key = k[len(prefix) :]
+            new_key = k[len(prefix):]
             new_state_dict[new_key] = v
         else:
             new_state_dict[k] = v
@@ -62,6 +65,11 @@ class MAPFGPTInference:
             )
         )
 
+        path_to_weights = Path(self.cfg.path_to_weights)
+        if path_to_weights.name in ['model-2M.pt', 'model-6M.pt', 'model-85M.pt']:
+            hf_hub_download(repo_id=self.cfg.repo_id, filename=path_to_weights.name, local_dir=path_to_weights.parent)
+            ToolboxRegistry.info(f'Using weights loaded from huggingface: {path_to_weights}')
+
         checkpoint = torch.load(
             Path(self.cfg.path_to_weights), map_location=self.cfg.device
         )
@@ -83,12 +91,12 @@ class MAPFGPTInference:
         for agent_idx, obs in enumerate(observations):
             if len(self.actions_history[agent_idx]) < self.cfg.num_previous_actions:
                 previous_actions[agent_idx] = ["n"] * (
-                    self.cfg.num_previous_actions - len(self.actions_history[agent_idx])
+                        self.cfg.num_previous_actions - len(self.actions_history[agent_idx])
                 ) + self.actions_history[agent_idx]
             else:
                 previous_actions[agent_idx] = self.actions_history[agent_idx][
-                    -self.cfg.num_previous_actions :
-                ]
+                                              -self.cfg.num_previous_actions:
+                                              ]
             next_action = ""
             for m in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
                 new_pos = (obs["global_xy"][0] + m[0], obs["global_xy"][1] + m[1])
