@@ -1,0 +1,4 @@
+git+https://github.com/CognitiveAISystems/pogema-toolbox.git@39e6e0a5909b517278b68859896e9e6e8f246573
+pyyaml
+matplotlib
+seaborn
