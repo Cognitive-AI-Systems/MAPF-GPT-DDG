@@ -21,7 +21,19 @@ The repository is based on the repository of original [MAPF-GPT](https://github.
 - `eval_configs` - a folder that contains configs from the POGEMA benchmark. Required by the `benchmark.py` script.
 - `ckpt_configs` - a folder that contains configs used for validation of intermidiate checkpoints used in ablation study.
 
-## Installation
+## Local Installation
+
+For local experiments using the model, it’s recommended to use `uv`.
+
+To install the dependencies with `uv`, run:
+
+```
+uv venv --python 3.10
+source .venv/bin/activate
+uv pip install -r docker/requirements.txt
+```
+
+## Docker Installation
 
 It's recommended to utilize Docker to build the environment compatible with MAPF-GPT code. The `docker` folder contains both `Dockerfile` and `requirements.txt` files to successfully build an appropriate container.
 
@@ -41,13 +53,13 @@ Thus, you can additionally choose from `2M`, `6M`, and `85M` model sizes of the 
 
 Here is an example of running MAPF-GPT-2M on a maze map:
 ```
-python3 example.py --map_name validation-mazes-seed-000 --model 2M-DDG --num_agents 32
+python example.py --map_name validation-mazes-seed-000 --model 2M-DDG --num_agents 32
 ```
 
 
 Here is an example of running MAPF-GPT-85M on `wfi_warehouse` map:
 ```
-python3 example.py --map_name wfi_warehouse --model 85M --num_agents 192
+python example.py --map_name wfi_warehouse --model 85M --num_agents 192
 ```
 
 In addition to statistics about SoC, success rate, etc., you will also get an SVG file that animates the solution found by MAPF-GPT, which will be saved to the `svg/` folder.
@@ -59,7 +71,7 @@ You can run the `benchmark.py` script, which will run both MAPF-GPT-2M and MAPF-
 You can also run the MAPF-GPT-85M model by setting `path_to_weights` to `hf_weights/model-85M.pt`. The weights for all models will be downloaded automatically.
 
 ```
-python3 benchmark.py
+python benchmark.py
 ```
 
 The results will be stored in the `eval_configs` folder near the corresponding configs. They can also be logged into wandb. The tables with average success rates will be displayed directly in the console.
