@@ -63,9 +63,11 @@ def main():
     algo.reset_states()
     results = run_episode(env, algo)
 
-    svg_path = f"svg/{args.map_name}-{args.model}-seed-{args.seed}.svg"
+    svg_path = Path(f"svg/{args.map_name}-{args.model}-seed-{args.seed}.svg")
+    svg_path.parent.mkdir(exist_ok=True)
     env.save_animation(svg_path)
     ToolboxRegistry.info(f'Saved animation to: {svg_path}')
+
 
     ToolboxRegistry.success(results)
 
